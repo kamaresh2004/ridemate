@@ -1,0 +1,45 @@
+# Runtime dependencies for the RideMate API.
+#
+# Every entry is pinned to an exact version so a deployment is reproducible and
+# an upstream release cannot silently change behaviour. Upgrades are deliberate:
+# bump the pin, run the test suite and `pip-audit -r backend/requirements.txt`.
+#
+# Test/CI-only tooling lives in requirements-dev.txt.
+
+# --- Web framework ---
+flask==3.1.3
+flask-cors==6.0.5
+
+# --- Database ---
+pymongo==4.20.0
+
+# --- Auth / crypto ---
+PyJWT==2.15.1
+bcrypt==5.0.0
+
+# --- HTTP / images / config ---
+Pillow==13.0.0
+opencv-python-headless==4.12.0.88
+pytesseract==0.3.13
+requests==2.34.2
+python-dotenv==1.2.4
+
+# --- Provider SDKs (runtime imports are guarded; install for production use) ---
+google-auth==2.62.2
+firebase-admin==7.8.0
+razorpay==2.0.1
+boto3==1.44.3
+redis==8.1.0
+
+# --- ASGI/WSGI server ---
+# gevent is the worker class that keeps long-lived SSE tracking streams from
+# consuming a request thread each (see gunicorn.conf.py).
+gunicorn==27.0.1
+gevent==26.9.0
+
+# IANA time zone data.
+# zoneinfo/ZoneInfo reads it from the OS, and a slim container image often
+# ships no tzdata at all -- so `ZoneInfo("Asia/Kolkata")` raises at import time
+# and takes the whole app down. Pinning it as a dependency is the fix that does
+# not depend on the base image.
+tzdata==2026.6

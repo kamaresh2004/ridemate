@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+  />
+
+  <meta name="theme-color" content="#635bff" />
+  <meta
+    name="description"
+    content="RideMate — share rides, split costs, travel together."
+  />
+
+  <title>RideMate — Share rides, travel together</title>
+
+  <link
+    rel="icon"
+    type="image/png"
+    href="assets/icon/app_icon.png"
+  />
+
+  <!-- =========================================================
+       API CONFIGURATION
+       =========================================================
+       
+       LOCAL DEVELOPMENT:
+       If frontend is running on localhost:5500/8000/etc.,
+       requests go to Flask on localhost:5000.
+
+       PRODUCTION:
+       Requests go to the Render Flask backend.
+
+       IMPORTANT:
+       Do NOT put Google Client Secret, Razorpay Secret,
+       MongoDB password, JWT secret, etc. in this file.
+       ========================================================= -->
+
+  <script>
+    (function () {
+      const hostname = window.location.hostname;
+      const port = window.location.port;
+
+      const isLocal =
+        hostname === "localhost" ||
+        hostname === "127.0.0.1";
+
+      // A separate static dev server (the `python -m http.server 5500` flow in
+      // the README) has no /api route, so point it at the Flask dev server.
+      // Everywhere else use the page's own origin: Flask serves the SPA and the
+      // API together, including on Render and on non-default ports. Hard-coding
+      // the API host used to make every request cross-origin, which the CSP
+      // connect-src then blocked -- the page looked fine but no button worked.
+      const STATIC_DEV_PORTS = new Set(["3000", "5173", "5500", "8000", "8080"]);
+
+      const sameOrigin = /^https?:/.test(window.location.origin)
+        ? window.location.origin
+        : "http://localhost:5000"; // opened as a file:// document
+
+      window.RIDEMATE_API =
+        isLocal && STATIC_DEV_PORTS.has(port)
+          ? "http://localhost:5000"
+          : sameOrigin;
+
+      // Remove trailing slash if someone changes the URL later.
+      window.RIDEMATE_API = window.RIDEMATE_API.replace(/\/+$/, "");
+
+      console.log(
+        "[RideMate] API:",
+        window.RIDEMATE_API || window.location.origin
+      );
+    })();
+  </script>
+
+  <!-- =========================================================
+       FONTS
+       ========================================================= -->
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link
+    rel="preconnect"
+    href="https://fonts.gstatic.com"
+    crossorigin
+  />
+
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@500;600;700;800&display=swap"
+    rel="stylesheet"
+  />
+
+  <!-- =========================================================
+       LEAFLET
+       ========================================================= -->
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
+
+  <!-- =========================================================
+       APP CSS
+       ========================================================= -->
+
+  <link
+    rel="stylesheet"
+    href="css/styles.css"
+  />
+</head>
+
+<body>
+
+  <!-- =========================================================
+       SPLASH SCREEN
+       ========================================================= -->
+
+  <div id="splash" class="splash">
+    <div
+      class="splash__logo"
+      aria-hidden="true"
+    ></div>
+
+    <div class="splash__bar">
+      <i></i>
+    </div>
+  </div>
+
+
+  <!-- =========================================================
+       AUTHENTICATED APPLICATION
+       ========================================================= -->
+
+  <div
+    id="appShell"
+    class="app hidden"
+  >
+
+    <!-- =======================================================
+         SIDEBAR
+         ======================================================= -->
+
+    <aside
+      class="sidebar"
+      id="sidebar"
+    >
+
+      <a
+        href="#/discover"
+        class="brand"
+      >
+
+        <span class="brand__mark">
+
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.1"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path
+              d="M5.2 11.2 6.7 6.8A2 2 0 0 1 8.6 5.4h6.8a2 2 0 0 1 1.9 1.4l1.5 4.4"
+            />
+
+            <path
+              d="M3.6 11.4h16.8v4.4h-1.9a2 2 0 0 1-4 0H9.5a2 2 0 0 1-4 0H3.6z"
+            />
+
+            <circle
+              cx="7.4"
+              cy="15.9"
+              r=".9"
+            />
+
+            <circle
+              cx="16.6"
+              cy="15.9"
+              r=".9"
+            />
+          </svg>
+
+        </span>
+
+        <span class="brand__name">
+          ride<i>mate</i>
+        </span>
+
+      </a>
+
+
+      <!-- Sidebar navigation -->
+
+      <nav
+        class="side-nav"
+        id="sideNav"
+      ></nav>
+
+
+      <!-- Publish ride -->
+
+      <a
+        href="#/publish"
+        class="btn btn-primary btn-block btn-lg side-cta"
+        data-nav="publish"
+      >
+
+        <svg
+          viewBox="0 0 24 24"
+          width="18"
+          height="18"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.4"
+          stroke-linecap="round"
+        >
+          <path d="M12 5v14" />
+          <path d="M5 12h14" />
+        </svg>
+
+        Publish a ride
+
+      </a>
+
+
+      <!-- Logged-in user -->
+
+      <div class="side-user">
+
+        <div
+          class="avatar avatar--lg"
+          id="sideAvatar"
+        ></div>
+
+        <div class="side-user__meta">
+
+          <strong id="sideUserName">
+            —
+          </strong>
+
+          <span id="sideUserEmail">
+            —
+          </span>
+
+        </div>
+
+
+        <button
+          class="btn-icon btn-icon--ghost"
+          id="logoutBtn"
+          title="Log out"
+          aria-label="Log out"
+        >
+
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+
+            <path
+              d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"
+            />
+
+            <path
+              d="m16 17 5-5-5-5"
+            />
+
+            <path
+              d="M21 12H9"
+            />
+
+          </svg>
+
+        </button>
+
+      </div>
+
+    </aside>
+
+
+    <!-- =======================================================
+         TOP BAR
+         ======================================================= -->
+
+    <div class="topbar">
+
+      <a
+        href="#/discover"
+        class="brand brand--top"
+      >
+
+        <span class="brand__mark">
+
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.1"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+
+            <path
+              d="M5.2 11.2 6.7 6.8A2 2 0 0 1 8.6 5.4h6.8a2 2 0 0 1 1.9 1.4l1.5 4.4"
+            />
+
+            <path
+              d="M3.6 11.4h16.8v4.4h-1.9a2 2 0 0 1-4 0H9.5a2 2 0 0 1-4 0H3.6z"
+            />
+
+            <circle
+              cx="7.4"
+              cy="15.9"
+              r=".9"
+            />
+
+            <circle
+              cx="16.6"
+              cy="15.9"
+              r=".9"
+            />
+
+          </svg>
+
+        </span>
+
+        <span class="brand__name">
+          ride<i>mate</i>
+        </span>
+
+      </a>
+
+
+      <div class="topbar__actions">
+
+        <a
+          href="#/publish"
+          class="btn btn-primary btn-sm"
+          data-nav="publish"
+        >
+          + Publish
+        </a>
+
+        <a
+          href="#/profile"
+          class="avatar avatar--sm"
+          id="topAvatar"
+        ></a>
+
+      </div>
+
+    </div>
+
+
+    <!-- =======================================================
+         MAIN APPLICATION
+         ======================================================= -->
+
+    <main
+      class="main"
+      id="main"
+    >
+
+      <div
+        id="view"
+        class="view"
+      ></div>
+
+    </main>
+
+
+    <!-- =======================================================
+         MOBILE NAVIGATION
+         ======================================================= -->
+
+    <nav
+      class="bottomnav"
+      id="bottomnav"
+    ></nav>
+
+  </div>
+
+
+  <!-- =========================================================
+       UNAUTHENTICATED AREA
+       Login / Register pages are injected here by app.js
+       ========================================================= -->
+
+  <div
+    id="authRoot"
+  ></div>
+
+
+  <!-- =========================================================
+       GLOBAL TOASTS
+       ========================================================= -->
+
+  <div
+    id="toastRoot"
+    class="toast-root"
+    aria-live="polite"
+  ></div>
+
+
+  <!-- =========================================================
+       GLOBAL MODALS
+       ========================================================= -->
+
+  <div
+    id="modalRoot"
+  ></div>
+
+
+  <!-- =========================================================
+       LEAFLET JS
+       ========================================================= -->
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  ></script>
+
+
+  <!-- =========================================================
+       RIDEMATE APPLICATION
+       ========================================================= -->
+
+  <script
+    type="module"
+    src="js/app.js"
+  ></script>
+
+</body>
+</html>

@@ -1,0 +1,7 @@
+# Test, lint and vulnerability-scanning tooling. Never installed in the runtime
+# image (Dockerfile installs backend/requirements.txt only).
+-r requirements.txt
+
+pytest==9.2.0
+pyflakes==4.1.0
+pip-audit==2.10.1
