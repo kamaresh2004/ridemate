@@ -155,6 +155,16 @@ class Config:
     GEOAPIFY_REVERSE_URL = _env("GEOAPIFY_REVERSE_URL",
                                 "https://api.geoapify.com/v1/geocode/reverse")
     GEOAPIFY_TIMEOUT_SECONDS = _env_int("GEOAPIFY_TIMEOUT_SECONDS", 4)
+    # Basemap tiles. OpenStreetMap's volunteer tile server refuses app traffic
+    # (HTTP 403 "App is not following the tile usage policy"), which left the
+    # Leaflet view grey. Geoapify serves the same OSM data under a commercial
+    # licence. Unlike the geocoder key, this one deliberately reaches the
+    # browser -- restrict it by domain in the Geoapify console.
+    GEOAPIFY_TILE_STYLE = _env("GEOAPIFY_TILE_STYLE", "osm-bright")
+    GEOAPIFY_TILE_URL = _env(
+        "GEOAPIFY_TILE_URL",
+        "https://maps.geoapify.com/v1/tile/{style}/{z}/{x}/{y}.png?apiKey={key}",
+    )
     # Identifiable contact appended to the Nominatim User-Agent (their usage
     # policy expects one). Defaults to PUBLIC_BASE_URL when set.
     GEO_CONTACT_URL = _env("GEO_CONTACT_URL", "")

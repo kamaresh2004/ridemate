@@ -219,6 +219,32 @@ def test_providers_reports_geoapify_when_configured(client, rider, app, monkeypa
     assert body["geocoding"] == "geoapify"
 
 
+def test_tiles_require_authentication(client):
+    assert client.get("/api/geo/tiles").status_code == 401
+
+
+def test_tiles_without_a_key_report_none(client, rider):
+    # OSM's volunteer tile server refuses app traffic, so a deployment with no
+    # key has no basemap to offer. Reporting null lets the frontend keep its
+    # own fallback instead of rendering an empty canvas.
+    body = client.get("/api/geo/tiles", headers=rider["auth"]).get_json()
+    assert body["ok"] is True
+    assert body["tiles"] is None
+
+
+def test_tiles_use_geoapify_and_leave_leaflet_placeholders(client, rider, app, monkeypatch):
+    _use_geoapify(app, monkeypatch, key="tile-key")
+    body = client.get("/api/geo/tiles", headers=rider["auth"]).get_json()
+    tiles = body["tiles"]
+    assert tiles["url"] == (
+        "https://maps.geoapify.com/v1/tile/osm-bright/{z}/{x}/{y}.png?apiKey=tile-key"
+    )
+    # Leaflet must still receive its own placeholders.
+    assert "{z}" in tiles["url"] and "{x}" in tiles["url"] and "{y}" in tiles["url"]
+    assert "Geoapify" in tiles["attribution"]
+    assert "OpenStreetMap" in tiles["attribution"]
+
+
 def _responder(answers, calls):
     """Stub requests.get: return `answers[q]`, default to an empty list."""
 

@@ -22,20 +22,59 @@ function L() {
 }
 
 /* ---------- map lifecycle ---------- */
-export function createMap(el, { zoom = true } = {}) {
+
+/* OpenStreetMap's volunteer tile server answers app traffic with 403
+   ("App is not following the tile usage policy"), which drew grey "Access
+   blocked" squares all over the map. The backend hands us a commercial tile
+   template (Geoapify) when one is configured; OSM stays as the fallback so a
+   missing key degrades to a map that mostly works, not an empty canvas. */
+const OSM_FALLBACK = {
+  url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  maxZoom: 19,
+};
+
+let tileConfig = null;
+let tileConfigPromise = null;
+
+function loadTileConfig() {
+  if (tileConfig) return Promise.resolve(tileConfig);
+  if (!tileConfigPromise) {
+    tileConfigPromise = Api.tiles()
+      .then((res) => (res && res.tiles && res.tiles.url ? res.tiles : OSM_FALLBACK))
+      .catch(() => OSM_FALLBACK)
+      .then((cfg) => { tileConfig = cfg; return cfg; });
+  }
+  return tileConfigPromise;
+}
+
+export function createMap(el, { zoom = true, tiles } = {}) {
   if (!L() || !el) return null;
   el.innerHTML = '';
   const map = L().map(el, { zoomControl: false, attributionControl: true });
-  L().tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  }).addTo(map);
   map.setView([12.9716, 77.5946], 11);
   if (zoom) L().control.zoom({ position: 'bottomright' }).addTo(map);
+
+  let layer = null;
+  const applyTiles = (cfg) => {
+    // The view can be torn down while the tile config is in flight (SPA route
+    // change). Attaching a layer to a removed map throws in Leaflet.
+    if (!map || map.__disposed || layer) return;
+    layer = L().tileLayer(cfg.url, {
+      attribution: cfg.attribution,
+      maxZoom: cfg.maxZoom || 20,
+    }).addTo(map);
+  };
+
+  if (tiles) applyTiles(tiles);
+  else loadTileConfig().then(applyTiles);
   return map;
 }
 
 export function destroyMap(map) {
-  if (map) map.remove();
+  if (!map) return;
+  map.__disposed = true;
+  map.remove();
 }
 
 /* ---------- markers ---------- */

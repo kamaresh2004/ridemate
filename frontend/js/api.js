@@ -258,6 +258,7 @@ export const Api = {
   geoSearch: (q, limit = 6) => get(`/api/geo/search?q=${encodeURIComponent(q)}&limit=${limit}`),
   geoReverse: (lat, lng) => get(`/api/geo/reverse?lat=${lat}&lng=${lng}`),
   geoRoute: (coords) => get(`/api/geo/route?points=${coords.map((c) => c.join(',')).join(',')}`),
+  tiles: () => get('/api/geo/tiles'),
 };
 
 function qs(params) {

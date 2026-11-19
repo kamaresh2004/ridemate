@@ -522,6 +522,41 @@ def route():
         }
 
 
+@bp.get("/tiles")
+@require_auth
+@rate_limit("default")
+def tiles():
+    """Basemap tile template for the Leaflet view.
+
+    OpenStreetMap's volunteer tile server answers app traffic with 403
+    ("App is not following the tile usage policy"), which rendered the map as
+    grey "Access blocked" squares. When a Geoapify key is configured the
+    browser is handed Geoapify's tile template instead; the key is
+    client-side by design and should be restricted by domain there.
+
+    `tiles: null` means the deployment has no tile provider, so the frontend
+    keeps its OSM fallback rather than showing an empty canvas.
+    """
+    cfg = current_app.config
+    key = (cfg.get("GEOAPIFY_API_KEY") or "").strip()
+    if not key:
+        return {"ok": True, "tiles": None}
+    style = (cfg.get("GEOAPIFY_TILE_STYLE") or "osm-bright").strip()
+    template = cfg.get("GEOAPIFY_TILE_URL") or ""
+    # Only {style} and {key} are ours to substitute; {z}/{x}/{y} must survive
+    # untouched for Leaflet.
+    url = template.replace("{style}", style).replace("{key}", key)
+    return {"ok": True, "tiles": {
+        "url": url,
+        "maxZoom": 20,
+        "attribution": (
+            '&copy; <a href="https://www.openstreetmap.org/copyright">'
+            'OpenStreetMap</a> contributors, '
+            '<a href="https://www.geoapify.com/">Powered by Geoapify</a>'
+        ),
+    }}
+
+
 @bp.get("/providers")
 @require_auth
 @rate_limit("default")
