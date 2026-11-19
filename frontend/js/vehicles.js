@@ -353,10 +353,25 @@ function card(v) {
 
 function docSlot(kind, v, label) {
   const url = v[`${kind}_document_url`];
-  return url
-    ? `<button type="button" class="badge badge--success" data-view-doc data-url="${h(url)}" title="View uploaded ${label}">${icon('check', 12)} ${label}</button>`
-    : `<label class="badge badge--ghost" style="cursor:pointer" title="Upload ${label}">${icon('upload', 12)} add
-        <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" hidden data-doc="${kind}" data-vid="${v.id}" /></label>`;
+  // "add" and "replace" are both offered: a captain whose file was lost to an
+  // ephemeral disk (or who simply wants a better photo) must be able to
+  // re-upload without deleting the vehicle to get the button back.
+  return `<span class="flex gap-4 items-center">
+    ${url
+      ? `<button type="button" class="badge badge--success" data-view-doc data-url="${h(url)}" title="View uploaded ${label}">${icon('check', 12)} ${label}</button>`
+      : ''}
+    <label class="badge badge--ghost" style="cursor:pointer" title="${url ? 'Replace' : 'Upload'} ${label}">${icon('upload', 12)} ${url ? 'replace' : 'add'}
+      <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" hidden data-doc="${kind}" data-vid="${v.id}" /></label>
+  </span>`;
+}
+
+function docError(err) {
+  // A document whose bytes are gone answers 404 even though its metadata still
+  // says "uploaded". Say what to do instead of surfacing "File not found."
+  if (err && (err.status === 404 || err.code === 'not_found')) {
+    return 'This file is no longer on the server — use “replace” to upload it again.';
+  }
+  return errMsg(err);
 }
 
 function wireDocs(grid, vehicles) {
@@ -368,7 +383,7 @@ function wireDocs(grid, vehicles) {
         const tab = window.open(URL.createObjectURL(blob), '_blank');
         if (tab) tab.opener = null;
         else toast('Your browser blocked the document tab. Allow pop-ups and try again.', 'error');
-      } catch (err) { toast(errMsg(err), 'error'); }
+      } catch (err) { toast(docError(err), 'error'); }
       finally { button.disabled = false; }
     });
   });
@@ -395,7 +410,7 @@ function wireDocs(grid, vehicles) {
         if (tab) tab.opener = null;
         else toast('Your browser blocked the document tab. Allow pop-ups and try again.', 'error');
       } catch (err) {
-        toast(errMsg(err), 'error');
+        toast(docError(err), 'error');
       } finally {
         button.disabled = false;
       }
