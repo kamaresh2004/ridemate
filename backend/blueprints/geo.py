@@ -531,16 +531,27 @@ def tiles():
     OpenStreetMap's volunteer tile server answers app traffic with 403
     ("App is not following the tile usage policy"), which rendered the map as
     grey "Access blocked" squares. When a Geoapify key is configured the
-    browser is handed Geoapify's tile template instead; the key is
-    client-side by design and should be restricted by domain there.
+    browser is handed Geoapify's tile template (the key is client-side by
+    design and should be restricted by domain there).
 
-    `tiles: null` means the deployment has no tile provider, so the frontend
-    keeps its OSM fallback rather than showing an empty canvas.
+    Without a key we still must not fall back to openstreetmap.org, so the
+    CARTO basemap -- the same OSM data on a CDN built to serve applications --
+    is used instead. The frontend keeps OSM only as a last resort for when
+    this endpoint itself is unreachable.
     """
     cfg = current_app.config
     key = (cfg.get("GEOAPIFY_API_KEY") or "").strip()
     if not key:
-        return {"ok": True, "tiles": None}
+        return {"ok": True, "tiles": {
+            "url": "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+            "subdomains": "abcd",
+            "maxZoom": 20,
+            "attribution": (
+                '&copy; <a href="https://www.openstreetmap.org/copyright">'
+                'OpenStreetMap</a> contributors, '
+                '&copy; <a href="https://carto.com/attributions">CARTO</a>'
+            ),
+        }}
     style = (cfg.get("GEOAPIFY_TILE_STYLE") or "osm-bright").strip()
     template = cfg.get("GEOAPIFY_TILE_URL") or ""
     # Only {style} and {key} are ours to substitute; {z}/{x}/{y} must survive

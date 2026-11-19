@@ -25,9 +25,9 @@ function L() {
 
 /* OpenStreetMap's volunteer tile server answers app traffic with 403
    ("App is not following the tile usage policy"), which drew grey "Access
-   blocked" squares all over the map. The backend hands us a commercial tile
-   template (Geoapify) when one is configured; OSM stays as the fallback so a
-   missing key degrades to a map that mostly works, not an empty canvas. */
+   blocked" squares all over the map. The backend hands us a tile CDN built for
+   applications (Geoapify when a key is configured, CARTO otherwise); OSM stays
+   only as a last resort for when the config call itself fails. */
 const OSM_FALLBACK = {
   url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -63,6 +63,7 @@ export function createMap(el, { zoom = true, tiles } = {}) {
     layer = L().tileLayer(cfg.url, {
       attribution: cfg.attribution,
       maxZoom: cfg.maxZoom || 20,
+      subdomains: cfg.subdomains || 'abc',
     }).addTo(map);
   };
 

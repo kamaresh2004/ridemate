@@ -223,13 +223,16 @@ def test_tiles_require_authentication(client):
     assert client.get("/api/geo/tiles").status_code == 401
 
 
-def test_tiles_without_a_key_report_none(client, rider):
-    # OSM's volunteer tile server refuses app traffic, so a deployment with no
-    # key has no basemap to offer. Reporting null lets the frontend keep its
-    # own fallback instead of rendering an empty canvas.
+def test_tiles_without_a_key_fall_back_to_carto(client, rider):
+    # Moving off openstreetmap.org must not depend on a key being present:
+    # the volunteer server blocks app traffic, so an unset GEOAPIFY_API_KEY
+    # would otherwise put the 403 grid back.
     body = client.get("/api/geo/tiles", headers=rider["auth"]).get_json()
-    assert body["ok"] is True
-    assert body["tiles"] is None
+    tiles = body["tiles"]
+    assert "cartocdn.com" in tiles["url"]
+    assert tiles["subdomains"] == "abcd"
+    assert "{z}" in tiles["url"] and "{x}" in tiles["url"] and "{y}" in tiles["url"]
+    assert "CARTO" in tiles["attribution"]
 
 
 def test_tiles_use_geoapify_and_leave_leaflet_placeholders(client, rider, app, monkeypatch):
