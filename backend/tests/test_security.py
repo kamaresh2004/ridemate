@@ -59,6 +59,10 @@ def test_security_headers_and_no_cache(client):
         "Cache-Control",
     ):
         assert header in r.headers
+    # A `no-referrer` policy makes third-party tile requests anonymous and
+    # OpenStreetMap answers them with 403, so the map renders blank.
+    assert r.headers["Referrer-Policy"] != "no-referrer"
+    assert "origin" in r.headers["Referrer-Policy"]
     assert "frame-ancestors 'none'" in r.headers["Content-Security-Policy"]
     assert r.headers["X-Content-Type-Options"] == "nosniff"
     assert r.headers["Cache-Control"] == "no-store"

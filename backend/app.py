@@ -41,7 +41,11 @@ _SECURITY_HEADERS = {
 
     "X-Frame-Options": "DENY",
 
-    "Referrer-Policy": "no-referrer",
+    # Cross-origin requests carry the origin (never the path), which is what
+    # third-party services need to identify the app. `no-referrer` made every
+    # map tile request anonymous and tile.openstreetmap.org answered 403 "App is
+    # not following the tile usage policy", leaving the map blank.
+    "Referrer-Policy": "strict-origin-when-cross-origin",
 
     "Permissions-Policy": (
         "camera=(), "
