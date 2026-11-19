@@ -205,9 +205,22 @@ def _ensure_index(collection, label, builder, *, critical=False, strict=False):
 
 def create_indexes(strict=False):
     users = _db.users
-    users.create_index("email", unique=True)
+    # Email is optional now: a rider can sign up with a phone number and no
+    # inbox. A plain unique index treats every missing field as NULL and allows
+    # exactly one such account, so it must be unique-on-non-empty-string instead.
+    _unique_string_index(users, "email")
+    # A phone number is a login credential, so it identifies one account. The
+    # partial filter keeps accounts that have not added a number out of the way.
+    _unique_string_index(users, "phone")
     users.create_index([("google_id", 1)], unique=True, sparse=True)
     users.create_index([("role", 1), ("created_at", -1)])
+
+    # Outstanding one-time codes. TTL on expires_at lets Mongo expire them even
+    # if this process dies between issuing and verifying; the code itself is
+    # never stored, only its HMAC (see backend/otp.py).
+    otps = _db.phone_otps
+    otps.create_index("phone", unique=True)
+    otps.create_index("expires_at", expireAfterSeconds=0)
 
     vehicles = _db.vehicles
     vehicles.create_index([("user_id", 1), ("created_at", -1)])
