@@ -1,4 +1,4 @@
-"""Geocoding (Nominatim/OSM) and routing (OSRM) proxied through the server."""
+"""Geocoding (Geoapify or Nominatim/OSM) and routing (OSRM), proxied server-side."""
 
 import re
 import threading
@@ -126,6 +126,98 @@ def search_variants(q):
 
 def _timeout():
     return current_app.config["OUTBOUND_TIMEOUT_SECONDS"]
+
+
+def _geocoding_provider():
+    """`geoapify` when a key is configured, otherwise Nominatim (`osm`)."""
+    provider = (current_app.config.get("GEOCODING_PROVIDER") or "osm").strip().lower()
+    if provider == "geoapify" and not current_app.config.get("GEOAPIFY_API_KEY"):
+        return "osm"
+    return provider
+
+
+def _geoapify_timeout():
+    return (current_app.config.get("GEOAPIFY_TIMEOUT_SECONDS")
+            or _timeout())
+
+
+def _geoapify_item(feature):
+    """Map one Geoapify GeoJSON feature to our suggestion shape."""
+    if not isinstance(feature, dict):
+        return None
+    props = feature.get("properties") or {}
+    coords = (feature.get("geometry") or {}).get("coordinates") or []
+    try:
+        lng = float(props["lon"])
+        lat = float(props["lat"])
+    except (KeyError, TypeError, ValueError):
+        try:
+            lng, lat = float(coords[0]), float(coords[1])
+        except (IndexError, TypeError, ValueError):
+            return None
+    formatted = (props.get("formatted") or "").strip()
+    if not formatted:
+        name = (props.get("name") or props.get("address_line1") or "").strip()
+        region = ", ".join(
+            part for part in (props.get("city") or props.get("district"),
+                              props.get("state"), "India") if part)
+        formatted = ", ".join(part for part in (name, region) if part)
+    if not formatted:
+        return None
+    # Keep the same "Name, Town" short form as the Nominatim rows so both
+    # providers render identically in the dropdown.
+    short = ", ".join(part.strip() for part in formatted.split(",")[:2] if part.strip())
+    return {"label": short or formatted, "address": formatted, "lat": lat, "lng": lng}
+
+
+def _geoapify_search(term, limit, countries):
+    params = {
+        "text": term,
+        "limit": max(1, min(int(limit), 10)),
+        "lang": "en",
+        "apiKey": current_app.config["GEOAPIFY_API_KEY"],
+    }
+    codes = [code.strip().lower() for code in (countries or "").split(",") if code.strip()]
+    if codes:
+        # Same bias as the Nominatim `countrycodes` parameter: a short prefix
+        # must not match a place on another continent.
+        params["filter"] = "countrycode:" + ",".join(codes)
+    resp = requests.get(
+        current_app.config["GEOAPIFY_SEARCH_URL"],
+        params=params,
+        timeout=_geoapify_timeout(),
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    features = body.get("features") if isinstance(body, dict) else None
+    if not isinstance(features, list):
+        current_app.logger.warning(
+            "Geoapify search returned %s, expected features", type(body).__name__)
+        return []
+    return _dedupe([mapped for mapped in (_geoapify_item(f) for f in features)
+                    if mapped is not None])
+
+
+def _nominatim_search(term, limit, countries):
+    params = {"q": term, "format": "json", "limit": limit, "addressdetails": 0}
+    if countries:
+        # Keep suggestions in the deployment's region. Without this a short
+        # prefix such as "Mum" matches places in Japan, Bosnia, Spain, ...
+        params["countrycodes"] = countries
+    resp = requests.get(
+        current_app.config["NOMINATIM_SEARCH"],
+        params=params,
+        headers=_headers(),
+        timeout=_timeout(),
+    )
+    resp.raise_for_status()
+    raw = resp.json()
+    if not isinstance(raw, list):
+        current_app.logger.warning(
+            "Geocoding search returned %s, expected a list", type(raw).__name__)
+        raw = []
+    return _dedupe([mapped for mapped in (_map_item(it) for it in raw)
+                    if mapped is not None])
 
 
 def route_distance_minutes(a, b):
@@ -263,7 +355,8 @@ def search():
         return {"ok": True, "data": [], "query": "", "relaxed": False}
 
     countries = (current_app.config.get("GEO_COUNTRY_CODES") or "").strip()
-    cache_key = (q.casefold(), limit, countries)
+    provider = _geocoding_provider()
+    cache_key = (q.casefold(), limit, countries, provider)
     cached = _cache_get(cache_key)
     if cached is not None:
         return {"ok": True, "data": [dict(item) for item in cached["data"]],
@@ -284,26 +377,20 @@ def search():
     upstream_items = []
     try:
         for term in variants:
-            params = {"q": term, "format": "json", "limit": limit, "addressdetails": 0}
-            if countries:
-                # Keep suggestions in the deployment's region. Without this a short
-                # prefix such as "Mum" matches places in Japan, Bosnia, Spain, ...
-                params["countrycodes"] = countries
-            resp = requests.get(
-                current_app.config["NOMINATIM_SEARCH"],
-                params=params,
-                headers=_headers(),
-                timeout=_timeout(),
-            )
-            resp.raise_for_status()
-            raw = resp.json()
-            if not isinstance(raw, list):
+            try:
+                if provider == "geoapify":
+                    upstream_items = _geoapify_search(term, limit, countries)
+                else:
+                    upstream_items = _nominatim_search(term, limit, countries)
+            except Exception:  # noqa: BLE001 - upstream is outside our control
+                if provider != "geoapify":
+                    raise
+                # Paid geocoder down, over quota or key rotated: the free one
+                # still answers, and a suggestions box must not go blank.
                 current_app.logger.warning(
-                    "Geocoding search returned %s, expected a list", type(raw).__name__)
-                raw = []
-            upstream_items = [mapped for mapped in (_map_item(it) for it in raw)
-                              if mapped is not None]
-            upstream_items = _dedupe(upstream_items)
+                    "Geoapify search failed for %r; falling back to Nominatim", term,
+                    exc_info=True)
+                upstream_items = _nominatim_search(term, limit, countries)
             used = term
             if upstream_items:
                 break
@@ -346,6 +433,26 @@ def reverse():
     lat = as_float(request.args.get("lat"), "lat", minimum=-90, maximum=90, required=True)
     lng = as_float(request.args.get("lng"), "lng", minimum=-180, maximum=180, required=True)
     try:
+        if _geocoding_provider() == "geoapify":
+            resp = requests.get(
+                current_app.config["GEOAPIFY_REVERSE_URL"],
+                params={"lat": lat, "lon": lng, "lang": "en",
+                        "apiKey": current_app.config["GEOAPIFY_API_KEY"]},
+                timeout=_geoapify_timeout(),
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            features = body.get("features") if isinstance(body, dict) else None
+            feature = features[0] if isinstance(features, list) and features else None
+            place = _geoapify_item(feature) if feature else None
+            if place is None:
+                return {"ok": True, "place": None}
+            props = feature.get("properties") or {}
+            return {"ok": True, "place": {
+                "label": (props.get("name") or place["label"]),
+                "address": place["address"],
+                "lat": place["lat"],
+                "lng": place["lng"]}}
         resp = requests.get(
             current_app.config["NOMINATIM_REVERSE"],
             params={"lat": lat, "lon": lng, "format": "jsonv2"},
@@ -422,9 +529,9 @@ def providers():
     cfg = current_app.config
     return {
         "ok": True,
-        # Geocoding always runs through Nominatim in this build. Reporting
-        # "google" whenever GOOGLE_MAPS_API_KEY was set made the endpoint lie.
-        "geocoding": "osm",
+        # Whichever upstream the deployment actually calls: Geoapify when a key
+        # is configured, Nominatim otherwise (see _geocoding_provider).
+        "geocoding": _geocoding_provider(),
         "geocoding_country_codes": cfg.get("GEO_COUNTRY_CODES") or "",
         "routing": "osrm",
         "maps": "leaflet-osm",

@@ -141,6 +141,20 @@ class Config:
     # in Japan, Bosnia, ... instead of the intended region. Bias results to
     # these comma-separated ISO-3166 alpha-2 country codes. Empty disables it.
     GEO_COUNTRY_CODES = _env("GEO_COUNTRY_CODES", "in")
+    # Upstream place lookup: `geoapify` (paid key, fast, Indian POIs and street
+    # addresses) or `osm` (Nominatim, free but rate-limited and frequently
+    # unreachable from the API host). A configured Geoapify key selects it,
+    # unless GEOCODING_PROVIDER pins a provider explicitly.
+    GEOAPIFY_API_KEY = _env("GEOAPIFY_API_KEY", "") or _env("GEO_API_KEY", "")
+    GEOCODING_PROVIDER = (
+        _env("GEOCODING_PROVIDER", "").strip().lower()
+        or ("geoapify" if GEOAPIFY_API_KEY else "osm")
+    )
+    GEOAPIFY_SEARCH_URL = _env("GEOAPIFY_SEARCH_URL",
+                               "https://api.geoapify.com/v1/geocode/autocomplete")
+    GEOAPIFY_REVERSE_URL = _env("GEOAPIFY_REVERSE_URL",
+                                "https://api.geoapify.com/v1/geocode/reverse")
+    GEOAPIFY_TIMEOUT_SECONDS = _env_int("GEOAPIFY_TIMEOUT_SECONDS", 4)
     # Identifiable contact appended to the Nominatim User-Agent (their usage
     # policy expects one). Defaults to PUBLIC_BASE_URL when set.
     GEO_CONTACT_URL = _env("GEO_CONTACT_URL", "")

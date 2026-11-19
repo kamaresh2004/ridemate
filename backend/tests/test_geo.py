@@ -141,6 +141,84 @@ def test_providers_reports_osm_geocoding(client, rider):
     assert "geocoding_country_codes" in body
 
 
+def _use_geoapify(app, monkeypatch, key="geoapify-test-key"):
+    monkeypatch.setitem(app.config, "GEOCODING_PROVIDER", "geoapify")
+    monkeypatch.setitem(app.config, "GEOAPIFY_API_KEY", key)
+
+
+GEOAPIFY_FEATURE = {
+    "properties": {
+        "name": "Thanjavur New Bus Stand",
+        "formatted": "Thanjavur New Bus Stand, New Bus Stand Road, Thanjavur, Tamil Nadu, India",
+        "lat": 10.7867,
+        "lon": 79.1378,
+    },
+    "geometry": {"coordinates": [79.1378, 10.7867]},
+}
+
+
+def test_geoapify_rows_are_mapped_and_the_key_stays_server_side(client, rider, app, monkeypatch):
+    _use_geoapify(app, monkeypatch)
+    seen = {}
+
+    def fake_get(url, params=None, headers=None, timeout=None, **kwargs):
+        seen.update({"url": url, "params": params})
+        return FakeResponse({"features": [GEOAPIFY_FEATURE]})
+
+    monkeypatch.setattr(geomod.requests, "get", fake_get)
+
+    resp = client.get("/api/geo/search?q=Thanjavur%20new%20bus%20stand",
+                      headers=rider["auth"])
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["data"], body
+    top = body["data"][0]
+    assert top["label"].startswith("Thanjavur New Bus Stand")
+    assert top["address"].endswith("India")
+    assert seen["url"] == app.config["GEOAPIFY_SEARCH_URL"]
+    assert seen["params"]["apiKey"] == "geoapify-test-key"
+    assert seen["params"]["filter"] == "countrycode:in"
+    # The browser must never receive the key.
+    assert "geoapify-test-key" not in resp.get_data(as_text=True)
+
+
+def test_geoapify_outage_falls_back_to_nominatim(client, rider, app, monkeypatch):
+    _use_geoapify(app, monkeypatch)
+    calls = []
+
+    def fake_get(url, params=None, headers=None, timeout=None, **kwargs):
+        calls.append(url)
+        if "geoapify" in url:
+            raise ConnectionError("quota exceeded")
+        return FakeResponse([{"lat": "10.7867", "lon": "79.1378",
+                              "display_name": "Thanjavur New Bus Stand, Tamil Nadu, India"}])
+
+    monkeypatch.setattr(geomod.requests, "get", fake_get)
+
+    resp = client.get("/api/geo/search?q=Thanjavur%20new%20bus%20stand",
+                      headers=rider["auth"])
+    assert resp.status_code == 200
+    assert resp.get_json()["data"]
+    assert any("nominatim" in url for url in calls)
+
+
+def test_reverse_uses_geoapify_when_configured(client, rider, app, monkeypatch):
+    _use_geoapify(app, monkeypatch)
+    monkeypatch.setattr(geomod.requests, "get",
+                        lambda *a, **k: FakeResponse({"features": [GEOAPIFY_FEATURE]}))
+
+    body = client.get("/api/geo/reverse?lat=10.78&lng=79.13",
+                      headers=rider["auth"]).get_json()
+    assert body["place"]["label"] == "Thanjavur New Bus Stand"
+    assert body["place"]["address"].endswith("India")
+
+
+def test_providers_reports_geoapify_when_configured(client, rider, app, monkeypatch):
+    _use_geoapify(app, monkeypatch)
+    body = client.get("/api/geo/providers", headers=rider["auth"]).get_json()
+    assert body["geocoding"] == "geoapify"
+
+
 def _responder(answers, calls):
     """Stub requests.get: return `answers[q]`, default to an empty list."""
 

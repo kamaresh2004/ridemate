@@ -47,6 +47,11 @@ def app():
         # local .env (production turns the rider gate on). Tests that exercise
         # the gate enable it explicitly.
         "PASSENGER_KYC_ENFORCE_BOOKING": False,
+        # Same reason: a developer who has a Geoapify key in .env must not send
+        # the suite through a provider the stubs do not emulate. The Geoapify
+        # path has its own tests, which opt in explicitly.
+        "GEOCODING_PROVIDER": "osm",
+        "GEOAPIFY_API_KEY": "",
     })
     yield app
 

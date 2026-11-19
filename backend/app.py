@@ -459,11 +459,14 @@ def create_app(config_object=Config):
             "database": db_ok,
             "providers": {
                 "maps": (
-                    "google"
-                    if app.config.get(
-                        "MAPS_API_KEY"
+                    "geoapify"
+                    if app.config.get("GEOCODING_PROVIDER") == "geoapify"
+                    and app.config.get("GEOAPIFY_API_KEY")
+                    else (
+                        "google"
+                        if app.config.get("MAPS_API_KEY")
+                        else "osm"
                     )
-                    else "osm"
                 ),
                 "payments": app.config.get(
                     "PAYMENT_PROVIDER",
