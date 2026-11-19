@@ -269,9 +269,9 @@ def search():
         return {"ok": True, "data": [dict(item) for item in cached["data"]],
                 "query": cached["query"], "relaxed": cached["relaxed"]}
 
-    # The offline gazetteer knows every town/village in South India, including
-    # the ones OSM has never mapped. It answers instantly, so an exact town name
-    # never needs the upstream POI search at all.
+    # The offline gazetteer knows every district, taluk and settlement in India,
+    # including the ones OSM has never mapped. It answers instantly, so an exact
+    # town name never needs the upstream POI search at all.
     local_items = places.search_places(q, limit=limit)
     if places.has_confident_match(q, local_items):
         payload = {"data": _public_items(local_items),

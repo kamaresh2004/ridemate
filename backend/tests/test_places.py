@@ -1,7 +1,7 @@
-"""Offline South-India gazetteer: coverage, aliases, ranking.
+"""Offline all-India gazetteer: coverage, aliases, ranking.
 
-The dataset ships with the repo (backend/data/places_south_india.json.gz), so
-these tests are deterministic and never touch the network.
+The dataset ships with the repo (backend/data/places_india.bin.gz), so these
+tests are deterministic and never touch the network.
 """
 
 import pytest
@@ -18,12 +18,38 @@ def labels(query, limit=8):
     return [item["label"] for item in gazetteer.search_places(query, limit)]
 
 
-def test_dataset_covers_the_southern_states():
-    entries = gazetteer._load()
-    assert len(entries) > 50000
-    states = {entry[2] for entry in entries}
+def test_dataset_covers_every_state_and_union_territory():
+    assert gazetteer.dataset_size() > 400000
+    states = gazetteer.states()
     assert {"Tamil Nadu", "Kerala", "Karnataka", "Andhra Pradesh",
-            "Telangana", "Puducherry"} <= states
+            "Telangana", "Puducherry", "Bihar", "Rajasthan", "Uttar Pradesh",
+            "Punjab", "West Bengal", "Assam", "Ladakh",
+            "Andaman and Nicobar"} <= states
+    assert len(states) >= 36
+
+
+def test_dataset_covers_districts_and_taluks_everywhere():
+    # Districts (ADM2) and taluks/tehsils (ADM3) are indexed for the whole
+    # country, so typing one resolves without a network call.
+    assert len(gazetteer.districts()) >= 700
+    for query, expected in [
+        ("Patna", "Bihar"),
+        ("Jaipur", "Rajasthan"),
+        ("Lucknow", "Uttar Pradesh"),
+        ("Bhopal", "Madhya Pradesh"),
+        ("Raipur", "Chhattisgarh"),
+        ("Ranchi", "Jharkhand"),
+        ("Guwahati", "Assam"),
+        ("Bhubaneswar", "Odisha"),
+        ("Dehradun", "Uttarakhand"),
+        ("Shimla", "Himachal Pradesh"),
+        ("Leh", "Ladakh"),
+    ]:
+        found = gazetteer.search_places(query, limit=3)
+        assert found, f"{query} produced no suggestions"
+        # The label prefers the district ("Lucknow, Lucknow District"); the
+        # full address is what proves the right state was picked.
+        assert expected.casefold() in found[0]["address"].casefold(), (query, found[0])
 
 
 @pytest.mark.parametrize("query, expected", [

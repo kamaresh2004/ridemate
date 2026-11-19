@@ -67,11 +67,12 @@ to the pinned Python dependencies; the Docker image installs Tesseract.
 
 Autocomplete merges two sources:
 
-- **Offline gazetteer** — ~119k settlements and district/taluk seats across
-  Andhra Pradesh, Telangana, Karnataka, Kerala, Tamil Nadu, Puducherry,
-  Lakshadweep and A&N (`backend/data/places_south_india.json.gz`, from
-  [GeoNames](https://www.geonames.org/), CC BY 4.0). Every district's main towns
-  are suggested instantly, even where OpenStreetMap has no record.
+- **Offline gazetteer** — ~556k settlements and the state/district/taluk seats
+  of all 36 states and UTs (`backend/data/places_india.bin.gz`, from
+  [GeoNames](https://www.geonames.org/), CC BY 4.0). Typing any Indian district
+  or taluk resolves instantly, even where OpenStreetMap has no record or is
+  unreachable. The file is packed as arrays rather than JSON objects so the
+  full country costs ~60 MB of RAM on the 512 MB free instance.
 - **Nominatim / OSRM** — POIs (bus stands, temples, hospitals) and routing.
 
 Town names typed with common Indian spellings or typos (`bustand`, `Trichy`,
