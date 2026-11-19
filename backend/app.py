@@ -249,6 +249,19 @@ def create_app(config_object=Config):
     # Load configuration
     app.config.from_object(config_object)
 
+    # A hosted container's disk is ephemeral, so `local` silently deletes every
+    # uploaded KYC document on the next deploy while the metadata stays in
+    # MongoDB. The console then answers "File not found" for a paper the captain
+    # definitely uploaded. Say so loudly at boot instead of letting staff
+    # discover it weeks later.
+    if (os.environ.get("RENDER")
+            and app.config.get("STORAGE_BACKEND") == "local"):
+        app.logger.warning(
+            "STORAGE_BACKEND=local on Render: uploaded documents will be lost on "
+            "the next deploy. Set STORAGE_BACKEND=mongo (or remove the variable "
+            "to use the durable default)."
+        )
+
     # Always initialise Redis extension
     app.extensions["rm_redis"] = None
 
@@ -461,6 +474,10 @@ def create_app(config_object=Config):
             "ok": True,
             "version": APP_VERSION,
             "database": db_ok,
+            # Not a secret: which backend holds uploads. Ops needs this, because
+            # "local" on a hosted container silently deletes every uploaded
+            # document on the next deploy while the metadata survives.
+            "storage": storage._backend(),
             "providers": {
                 "maps": (
                     "geoapify"
