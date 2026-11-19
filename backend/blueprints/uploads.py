@@ -63,6 +63,64 @@ def _read_upload():
     return data, (file.filename or "document")
 
 
+def apply_vehicle_document(vehicle, kind, data, original_name, actor_id):
+    """Store one paper on a vehicle and re-open verification.
+
+    Shared by the captain's own upload and the staff upload so the anti-swap
+    rule cannot drift between the two: whoever sends the bytes, a new document
+    means the packet has to be looked at again. `uploaded_by` records which
+    account supplied the file -- normally the owner, sometimes a reviewer acting
+    on a paper the captain sent out of band.
+    """
+    db = get_db()
+    vehicle_id = vehicle["_id"]
+    owner_id = vehicle["user_id"]
+    doc_field, verified_field = _field_names(kind)
+    old = vehicle.get(doc_field) or {}
+    doc_id = secrets.token_hex(12)
+    metadata = store_private_document(
+        owner_id, kind, doc_id, data, original_name,
+        extra={"status": "uploaded",
+               "original_name": (original_name or "document")[:120],
+               "uploaded_by": str(actor_id)},
+    )
+    key = metadata["key"]
+    res = db.vehicles.update_one(
+        {"_id": vehicle_id},
+        {"$set": {
+            doc_field: metadata,
+            verified_field: False,
+            "updated_at": utcnow(),
+        }},
+    )
+    if not res.matched_count:
+        delete_private_document(key)
+        raise APIError("Vehicle not found.", 404, code="not_found")
+    if old.get("key") and old.get("key") != key:
+        if old["key"].startswith("private/"):
+            delete_private_document(old["key"])
+        else:
+            storage.delete_key(old["key"])
+
+    # A new document re-opens verification. Without this a driver could get a
+    # vehicle approved once and then swap in different papers, which is the
+    # obvious way to defeat the control.
+    from ..kyc import reset_on_document_change
+
+    reset_on_document_change(vehicle_id, owner_id, doc_field)
+
+    # If this upload completed the packet, start a fresh automated check now.
+    # In `manual` mode this is a no-op, so current behaviour is unchanged.
+    from .. import kyc_auto
+
+    kyc_auto.on_documents_changed(vehicle_id, owner_id)
+    if kind == "dl":
+        from .. import ocr_queue
+
+        ocr_queue.enqueue_licence_check(vehicle_id, owner_id)
+    return metadata
+
+
 @bp.post("/vehicle-doc")
 @require_auth
 @rate_limit("strict")
@@ -78,47 +136,7 @@ def vehicle_document():
         raise APIError("Vehicle not found.", 404, code="not_found")
 
     data, original_name = _read_upload()
-    doc_field, verified_field = _field_names(kind)
-    old = vehicle.get(doc_field) or {}
-    doc_id = secrets.token_hex(12)
-    metadata = store_private_document(
-        g.user["_id"], kind, doc_id, data, original_name,
-        extra={"status": "uploaded", "original_name": (original_name or "document")[:120]},
-    )
-    key = metadata["key"]
-    res = db.vehicles.update_one(
-        {"_id": vehicle_id, "user_id": g.user["_id"]},
-        {"$set": {
-            doc_field: metadata,
-            verified_field: False,
-            "updated_at": utcnow(),
-        }},
-    )
-    if not res.modified_count:
-        delete_private_document(key)
-        raise APIError("Vehicle not found.", 404, code="not_found")
-    if old.get("key") and old.get("key") != key:
-        if old["key"].startswith("private/"):
-            delete_private_document(old["key"])
-        else:
-            storage.delete_key(old["key"])
-
-    # A new document re-opens verification. Without this a driver could get a
-    # vehicle approved once and then swap in different papers, which is the
-    # obvious way to defeat the control.
-    from ..kyc import reset_on_document_change
-
-    reset_on_document_change(vehicle_id, g.user["_id"], doc_field)
-
-    # If this upload completed the packet, start a fresh automated check now.
-    # In `manual` mode this is a no-op, so current behaviour is unchanged.
-    from .. import kyc_auto
-
-    kyc_auto.on_documents_changed(vehicle_id, g.user["_id"])
-    if kind == "dl":
-        from .. import ocr_queue
-
-        ocr_queue.enqueue_licence_check(vehicle_id, g.user["_id"])
+    apply_vehicle_document(vehicle, kind, data, original_name, g.user["_id"])
     return {"ok": True, "status": "uploaded", "kind": kind,
             "verification_status": "unverified"}
 

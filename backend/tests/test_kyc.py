@@ -7,6 +7,7 @@ based on. Those two properties are what most of this file asserts.
 
 import base64
 import io
+import json
 
 import pytest
 from bson import ObjectId
@@ -38,6 +39,15 @@ def _upload(client, auth_hdr, vehicle_id, kind):
                        content_type="multipart/form-data")
     assert resp.status_code == 200, resp.get_json()
     return resp.get_json()
+
+
+def _draft_vehicle(client, driver, plate, dl="TN4920260001910"):
+    """A vehicle the captain started and left incomplete (details only)."""
+    created = client.post("/api/vehicles", headers=driver["auth"], json={
+        "vehicle_type": "4-wheeler", "vehicle_number": plate,
+        "vehicle_model": "Draft Car", "seat_count": 3, "dl_number": dl})
+    assert created.status_code == 201, created.get_json()
+    return created.get_json()["vehicle"]["id"]
 
 
 def _complete_kyc(client, db, driver, seq, number="KA01AB1234"):
@@ -239,6 +249,97 @@ def test_incomplete_packet_is_listed_for_staff_with_what_is_missing(client, db, 
     assert row["documents"]["insurance"] is None
     # The uploaded licence is readable even though the packet is incomplete.
     assert client.get(row["documents"]["dl"], headers=admin["auth"]).status_code == 200
+
+
+def test_staff_can_edit_an_incomplete_vehicle(client, db, admin, driver):
+    """The in-progress list is editable, not a dead end."""
+    vid = _draft_vehicle(client, driver, "TN49ZZ0010")
+    _upload(client, driver["auth"], vid, "dl")
+
+    resp = client.patch(f"/api/admin/vehicles/{vid}", headers=admin["auth"],
+                        json={"vehicle_model": "Hyundai Venue",
+                              "insurance_number": "POL-2026-5511"})
+    assert resp.status_code == 200, resp.get_json()
+    payload = resp.get_json()
+    assert "insurance_number" in payload["changed"]
+    assert payload["reopened"] is True
+    assert payload["missing"] == ["insurance_document"]
+
+    vehicle = db.vehicles.find_one({"_id": ObjectId(vid)})
+    assert vehicle["vehicle_model"] == "Hyundai Venue"
+    assert vehicle["staff_edited_by"] == admin["user"]["_id"]
+
+    row = db.audit_logs.find_one({"action": "identity.vehicle.edit",
+                                  "target_id": vid})
+    assert row, "the edit must be audited"
+    assert row["meta"]["changed"]
+    # Policy and licence numbers are PII; the log records field names only.
+    assert "POL-2026-5511" not in json.dumps(row, default=str)
+
+
+def test_staff_can_upload_the_missing_paper_and_the_packet_enters_review(
+        client, db, admin, driver):
+    vid = _draft_vehicle(client, driver, "TN49ZZ0011")
+    _upload(client, driver["auth"], vid, "dl")
+    client.patch(f"/api/admin/vehicles/{vid}", headers=admin["auth"],
+                 json={"insurance_number": "POL-2026-6622"})
+
+    resp = client.post(f"/api/admin/vehicles/{vid}/document", headers=admin["auth"],
+                       data={"doc": "insurance",
+                             "file": (io.BytesIO(PNG), "insurance.png")},
+                       content_type="multipart/form-data")
+    assert resp.status_code == 200, resp.get_json()
+    payload = resp.get_json()
+    assert payload["missing"] == []
+    # A packet staff just completed is forwarded, otherwise it would sit in the
+    # in-progress list with no approve button.
+    assert payload["submitted"] is True
+    assert payload["verification_status"] == KYC_SUBMITTED
+
+    pending = client.get("/api/admin/vehicles/pending", headers=admin["auth"])
+    assert any(row["id"] == vid for row in pending.get_json()["data"])
+    approved = client.post(f"/api/admin/vehicles/{vid}/verify",
+                           headers=admin["auth"], json={"decision": "approve"})
+    assert approved.status_code == 200
+    assert approved.get_json()["vehicle"]["verification_status"] == KYC_VERIFIED
+
+
+def test_staff_identity_edit_reopens_review(client, db, admin, driver):
+    vid = _complete_kyc(client, db, driver, 7)
+    client.post(f"/api/vehicles/{vid}/submit-verification",
+                headers=driver["auth"], json={})
+
+    resp = client.patch(f"/api/admin/vehicles/{vid}", headers=admin["auth"],
+                        json={"vehicle_number": "KA01ZZ9998"})
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.get_json()["reopened"] is True
+    vehicle = db.vehicles.find_one({"_id": ObjectId(vid)})
+    assert vehicle["verification_status"] == KYC_SUBMITTED
+    assert vehicle["kyc_reviewed_by"] is None
+
+
+def test_staff_cannot_edit_a_decided_vehicle(client, db, admin, driver):
+    vid = _complete_kyc(client, db, driver, 8)
+    client.post(f"/api/vehicles/{vid}/submit-verification",
+                headers=driver["auth"], json={})
+    client.post(f"/api/admin/vehicles/{vid}/verify", headers=admin["auth"],
+                json={"decision": "approve"})
+
+    resp = client.patch(f"/api/admin/vehicles/{vid}", headers=admin["auth"],
+                        json={"vehicle_model": "Changed after approval"})
+    assert resp.status_code == 409
+    assert resp.get_json()["error"]["code"] == "vehicle_verified"
+
+
+def test_only_staff_can_edit_or_upload_for_a_captain(client, db, driver, rider):
+    vid = _draft_vehicle(client, driver, "TN49ZZ0012")
+    assert client.patch(f"/api/admin/vehicles/{vid}", headers=rider["auth"],
+                        json={"vehicle_model": "Nope"}).status_code == 403
+    assert client.post(f"/api/admin/vehicles/{vid}/document",
+                       headers=rider["auth"],
+                       data={"doc": "insurance",
+                             "file": (io.BytesIO(PNG), "insurance.png")},
+                       content_type="multipart/form-data").status_code == 403
 
 
 def test_support_cannot_see_drafts_but_can_see_the_queue(client, db, admin, driver, rider):

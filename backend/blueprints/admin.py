@@ -591,8 +591,12 @@ def vehicle_progress():
     was that a captain who uploaded a licence and stopped was invisible to
     staff -- which reads as "my vehicle never reached the console" even though
     it is sitting in the app. This list surfaces those drafts with exactly what
-    is still missing, and it is read-only: there is no approve button here
-    because approval needs a complete packet.
+    is still missing.
+
+    It is editable rather than read-only: support routinely has the missing
+    policy number or a photo sent by email, and being shown a gap with no way to
+    close it is not a queue. Completing the packet here forwards it to review,
+    where approval lives, so the approve/reject rule is unchanged.
     """
     from ..kyc import missing_requirements
 
@@ -625,6 +629,10 @@ def vehicle_progress():
             "vehicle_number": vehicle.get("vehicle_number", ""),
             "vehicle_model": vehicle.get("vehicle_model", ""),
             "vehicle_type": vehicle.get("vehicle_type", ""),
+            "seat_count": vehicle.get("seat_count"),
+            "color": vehicle.get("color", ""),
+            "dl_number": vehicle.get("dl_number", ""),
+            "insurance_number": vehicle.get("insurance_number", ""),
             "verification_status": vehicle.get("verification_status") or "unverified",
             "missing": [labels.get(field, field) for field in missing_requirements(vehicle)],
             "documents": {
@@ -640,6 +648,143 @@ def vehicle_progress():
             "reason": vehicle.get("kyc_reason"),
         })
     return {"ok": True, "data": items, "total": len(items)}
+
+
+def _auto_submit_if_complete(vehicle, actor_id):
+    """Forward a packet staff just completed, so it lands in the review queue.
+
+    Approval is only possible from `submitted` (see kyc._KYC_TRANSITIONS). A
+    staff edit that filled the last gap would otherwise leave a complete packet
+    sitting in the in-progress list with nothing to click.
+    """
+    from ..kyc import (KYC_REJECTED, KYC_UNVERIFIED, kyc_state,
+                       missing_requirements, submit_for_verification)
+
+    if missing_requirements(vehicle):
+        return False
+    if kyc_state(vehicle) not in (KYC_UNVERIFIED, KYC_REJECTED):
+        return False
+    try:
+        submit_for_verification(vehicle["_id"], vehicle["user_id"])
+    except APIError:
+        # Consent/automation preconditions failing must not lose the edit the
+        # reviewer already saved; the packet simply stays with the captain.
+        return False
+    _audit("identity.vehicle.submit", actor_id, "vehicle", vehicle["_id"],
+           {"by": "staff"})
+    return True
+
+
+@bp.patch("/vehicles/<vid>")
+@require_admin
+@rate_limit("strict")
+def edit_vehicle(vid):
+    """Let staff correct a captain's vehicle details.
+
+    The in-progress list used to be strictly read-only, which left support able
+    to see a mistyped plate or a missing policy number and do nothing about it.
+    Every change is audited against the staff account, and identity fields
+    (plate, licence, insurance) are treated exactly as a captain's own edit:
+    changing one re-opens review, because an approval only ever covers the
+    details that were actually looked at.
+    """
+    from .vehicles import _normalize
+
+    db = get_db()
+    vehicle_id = to_object_id(vid, "vehicle")
+    vehicle = db.vehicles.find_one({"_id": vehicle_id})
+    if not vehicle:
+        raise APIError("Vehicle not found.", 404, code="not_found")
+    if vehicle.get("verification_status") == "verified":
+        raise APIError(
+            "This vehicle is already approved. Ask the captain to reopen it by "
+            "uploading a document instead.", 409, code="vehicle_verified")
+
+    fields = _normalize(body(), partial=True)
+    if fields.get("vehicle_number") and \
+            fields["vehicle_number"] != vehicle.get("vehicle_number"):
+        if db.vehicles.count_documents({
+                "vehicle_number": fields["vehicle_number"],
+                "_id": {"$ne": vehicle_id}}):
+            raise APIError("This registration number belongs to another vehicle.",
+                           409, code="duplicate_vehicle",
+                           details={"fields": ["vehicle_number"]})
+
+    changed = sorted(k for k in fields if fields[k] != vehicle.get(k))
+    identity_fields = ("vehicle_number", "dl_number", "insurance_number")
+    reopened = [k for k in changed if k in identity_fields]
+    if reopened:
+        fields.update({
+            "verification_status": "unverified",
+            "kyc_submitted_at": None,
+            "kyc_reviewed_at": None,
+            "kyc_reviewed_by": None,
+            "kyc_reason": None,
+            "licence_verified": False,
+            "insurance_verified": False,
+        })
+        if "dl_number" in reopened:
+            fields["licence_ocr_check"] = None
+
+    if changed:
+        fields["updated_at"] = utcnow()
+        fields["staff_edited_at"] = utcnow()
+        fields["staff_edited_by"] = g.user["_id"]
+        db.vehicles.update_one({"_id": vehicle_id}, {"$set": fields})
+        # Field names only: document and policy numbers are PII and have no
+        # business being copied into an append-only log.
+        _audit("identity.vehicle.edit", g.user["_id"], "vehicle", vehicle_id,
+               {"changed": changed, "reopened": bool(reopened)})
+
+    fresh = db.vehicles.find_one({"_id": vehicle_id})
+    submitted = _auto_submit_if_complete(fresh, g.user["_id"])
+    fresh = db.vehicles.find_one({"_id": vehicle_id})
+    from ..kyc import missing_requirements
+    return {"ok": True, "changed": changed, "reopened": bool(reopened),
+            "submitted": submitted,
+            "missing": missing_requirements(fresh),
+            "verification_status": fresh.get("verification_status")}
+
+
+@bp.post("/vehicles/<vid>/document")
+@require_admin
+@rate_limit("strict")
+def upload_vehicle_document(vid):
+    """Staff upload of a paper received out of band (email, WhatsApp, walk-in).
+
+    Support could see that insurance was missing and had no way to record the
+    copy the captain had already sent them. The bytes are sealed with the same
+    encryption as an owner upload, the metadata records which staff account
+    supplied them, and verification re-opens like any other document change.
+    """
+    from .uploads import KINDS, _read_upload, apply_vehicle_document
+    from ..kyc import missing_requirements
+
+    db = get_db()
+    vehicle_id = to_object_id(vid, "vehicle")
+    kind = (request.form.get("doc") or "").strip().lower()
+    if kind not in KINDS:
+        raise APIError("doc must be 'dl' or 'insurance'.", 422,
+                       code="validation_error")
+    vehicle = db.vehicles.find_one({"_id": vehicle_id})
+    if not vehicle:
+        raise APIError("Vehicle not found.", 404, code="not_found")
+    if vehicle.get("verification_status") == "verified":
+        raise APIError(
+            "This vehicle is already approved; a replacement paper would reopen "
+            "review.", 409, code="vehicle_verified")
+
+    data, original_name = _read_upload()
+    apply_vehicle_document(vehicle, kind, data, original_name, g.user["_id"])
+    _audit("identity.vehicle.document", g.user["_id"], "vehicle", vehicle_id,
+           {"kind": kind, "size": len(data)})
+
+    fresh = db.vehicles.find_one({"_id": vehicle_id})
+    submitted = _auto_submit_if_complete(fresh, g.user["_id"])
+    fresh = db.vehicles.find_one({"_id": vehicle_id})
+    return {"ok": True, "kind": kind, "submitted": submitted,
+            "missing": missing_requirements(fresh),
+            "verification_status": fresh.get("verification_status")}
 
 
 def _admin_auto_check(vehicle):
