@@ -105,7 +105,16 @@ class Config:
     # Uploads
     MAX_UPLOAD_MB = _env_int("MAX_UPLOAD_MB", 8)
     MAX_CONTENT_LENGTH = MAX_UPLOAD_MB * 1024 * 1024
-    STORAGE_BACKEND = _env("STORAGE_BACKEND", "local")  # local | s3
+    # local | s3 | mongo. A hosted container's filesystem is ephemeral: every
+    # deploy wipes uploaded KYC images while their metadata stays in MongoDB,
+    # which surfaced in the staff console as "File not found" on a document
+    # that had definitely been uploaded. Render sets RENDER=true, so documents
+    # go to MongoDB there (durable, and already the metadata store) unless the
+    # operator names another backend explicitly.
+    STORAGE_BACKEND = _env(
+        "STORAGE_BACKEND",
+        "mongo" if os.environ.get("RENDER") else "local",
+    )
     STORAGE_ACCESS_KEY = _env("STORAGE_ACCESS_KEY", "") or _env("AWS_ACCESS_KEY_ID", "")
     STORAGE_SECRET_KEY = _env("STORAGE_SECRET_KEY", "") or _env("AWS_SECRET_ACCESS_KEY", "")
     STORAGE_BUCKET = _env("STORAGE_BUCKET", "") or _env("AWS_BUCKET", "ridemate")

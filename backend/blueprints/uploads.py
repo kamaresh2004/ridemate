@@ -138,7 +138,14 @@ def download_document(vid, kind):
     if not vehicle:
         raise APIError("Vehicle not found.", 404, code="not_found")
     is_owner = str(vehicle["user_id"]) == str(g.user["_id"])
-    is_reviewer = g.user.get("role") in ("admin", "support") and vehicle.get("verification_status") == "submitted"
+    # Staff may open papers on a vehicle that is awaiting or building a packet:
+    # the console now lists incomplete packets too, and a reviewer who cannot
+    # see an uploaded licence cannot tell whether the captain supplied anything.
+    # A *decided* vehicle is deliberately excluded -- once the packet is
+    # approved or rejected, reviewers lose access to the images.
+    is_reviewer = (g.user.get("role") in ("admin", "support")
+                   and vehicle.get("verification_status")
+                   in ("submitted", "unverified", "rejected"))
     if not (is_owner or is_reviewer):
         raise APIError("Vehicle not found.", 404, code="not_found")
 

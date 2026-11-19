@@ -215,6 +215,41 @@ def test_admin_can_review_submitted_dl_insurance_packet(client, db, admin, drive
     assert client.get(packet["documents"]["dl"], headers=admin["auth"]).status_code == 404
 
 
+def test_incomplete_packet_is_listed_for_staff_with_what_is_missing(client, db, admin, driver):
+    """A captain who uploads one paper and stops must still be visible."""
+    created = client.post("/api/vehicles", headers=driver["auth"], json={
+        "vehicle_type": "4-wheeler", "vehicle_number": "TN49ZZ0001",
+        "vehicle_model": "Draft Car", "seat_count": 3,
+        "dl_number": "TN4920260001902"})
+    assert created.status_code == 201, created.get_json()
+    vid = created.get_json()["vehicle"]["id"]
+    _upload(client, driver["auth"], vid, "dl")
+
+    # Not a review packet yet, so the ready queue stays empty for it...
+    pending = client.get("/api/admin/vehicles/pending", headers=admin["auth"]).get_json()
+    assert all(row["id"] != vid for row in pending["data"])
+
+    # ...but staff can see the draft and exactly what is outstanding.
+    resp = client.get("/api/admin/vehicles/progress", headers=admin["auth"])
+    assert resp.status_code == 200, resp.get_json()
+    row = next(item for item in resp.get_json()["data"] if item["id"] == vid)
+    assert "insurance document" in row["missing"]
+    assert "insurance number" in row["missing"]
+    assert row["documents"]["dl"].endswith("/dl")
+    assert row["documents"]["insurance"] is None
+    # The uploaded licence is readable even though the packet is incomplete.
+    assert client.get(row["documents"]["dl"], headers=admin["auth"]).status_code == 200
+
+
+def test_support_cannot_see_drafts_but_can_see_the_queue(client, db, admin, driver, rider):
+    client.post("/api/vehicles", headers=driver["auth"], json={
+        "vehicle_type": "4-wheeler", "vehicle_number": "TN49ZZ0002",
+        "vehicle_model": "Draft Car", "seat_count": 3,
+        "dl_number": "TN4920260001903"})
+    assert client.get("/api/admin/vehicles/progress",
+                      headers=rider["auth"]).status_code == 403
+
+
 def test_rejection_requires_a_reason(client, db, admin, driver):
     vid = _complete_kyc(client, db, driver, 5)
     client.post(f"/api/vehicles/{vid}/submit-verification", headers=driver["auth"], json={})

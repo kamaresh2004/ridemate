@@ -41,6 +41,13 @@ def _bucket():
     return Config.STORAGE_BUCKET
 
 
+def _mongo_blobs():
+    """Collection holding file bytes when the mongo backend is selected."""
+    from .db import get_db
+
+    return get_db()["file_blobs"]
+
+
 def _s3_client():
     from .config import Config
 
@@ -73,11 +80,25 @@ def detect_extension(data, declared):
 
 
 def save_to_key(key, data, content_type):
-    if _backend() == "s3":
+    backend = _backend()
+    if backend == "s3":
         client = _s3_client()
         if client is None:
             raise APIError("Storage is misconfigured.", 503, code="storage_unconfigured")
         client.put_object(Bucket=_bucket(), Key=key, Body=data, ContentType=content_type)
+        return True
+    if backend == "mongo":
+        from bson import Binary
+
+        from .db import utcnow
+
+        _mongo_blobs().replace_one(
+            {"_id": key},
+            {"_id": key, "data": Binary(data),
+             "content_type": content_type or "application/octet-stream",
+             "size": len(data), "created_at": utcnow()},
+            upsert=True,
+        )
         return True
     target = UPLOAD_DIR / key
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -88,7 +109,8 @@ def save_to_key(key, data, content_type):
 
 def read_key(key):
     """Returns (bytes, content_type, filename)."""
-    if _backend() == "s3":
+    backend = _backend()
+    if backend == "s3":
         client = _s3_client()
         if client is None:
             raise APIError("Storage is misconfigured.", 503, code="storage_unconfigured")
@@ -96,6 +118,13 @@ def read_key(key):
         body = obj["Body"].read()
         ctype = obj.get("ContentType", "application/octet-stream")
         return body, ctype, os.path.basename(key)
+    if backend == "mongo":
+        doc = _mongo_blobs().find_one({"_id": key})
+        if not doc:
+            raise APIError("File not found.", 404, code="not_found")
+        return (bytes(doc.get("data") or b""),
+                doc.get("content_type") or "application/octet-stream",
+                os.path.basename(key))
     target = UPLOAD_DIR / key
     if not target.is_file():
         raise APIError("File not found.", 404, code="not_found")
@@ -108,12 +137,19 @@ def read_key(key):
 
 
 def delete_key(key):
-    if _backend() == "s3":
+    backend = _backend()
+    if backend == "s3":
         client = _s3_client()
         if client is None:
             return
         try:
             client.delete_object(Bucket=_bucket(), Key=key)
+        except Exception:  # noqa: BLE001 - best effort
+            pass
+        return
+    if backend == "mongo":
+        try:
+            _mongo_blobs().delete_one({"_id": key})
         except Exception:  # noqa: BLE001 - best effort
             pass
         return
@@ -136,7 +172,7 @@ def document_key(user_id, directory, ext):
 def public_avatar_url(key):
     if not key:
         return ""
-    if _backend() == "s3":
+    if _backend() in ("s3", "mongo"):
         return f"/api/uploads/avatar?key={key}"
     return f"/uploads/{key}"
 

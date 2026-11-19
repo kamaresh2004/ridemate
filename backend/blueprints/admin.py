@@ -581,6 +581,67 @@ def pending_vehicle_reviews():
     return {"ok": True, "data": items, "total": len(items)}
 
 
+@bp.get("/vehicles/progress")
+@require_admin
+@rate_limit("default")
+def vehicle_progress():
+    """Vehicles with papers on file that are not a complete review packet yet.
+
+    The review queue only lists `submitted` packets, by design. The side effect
+    was that a captain who uploaded a licence and stopped was invisible to
+    staff -- which reads as "my vehicle never reached the console" even though
+    it is sitting in the app. This list surfaces those drafts with exactly what
+    is still missing, and it is read-only: there is no approve button here
+    because approval needs a complete packet.
+    """
+    from ..kyc import missing_requirements
+
+    db = get_db()
+    rows = list(db.vehicles.find({
+        "verification_status": {"$in": ["unverified", "rejected"]},
+        "$or": [
+            {"dl_document.key": {"$exists": True, "$nin": [None, ""]}},
+            {"insurance_document.key": {"$exists": True, "$nin": [None, ""]}},
+            {"rc_document.key": {"$exists": True, "$nin": [None, ""]}},
+        ],
+    }).sort("updated_at", -1).limit(100))
+
+    labels = {
+        "dl_number": "licence number",
+        "insurance_number": "insurance number",
+        "dl_document": "licence document",
+        "insurance_document": "insurance document",
+    }
+    items = []
+    for vehicle in rows:
+        owner = db.users.find_one({"_id": vehicle.get("user_id")},
+                                  {"name": 1, "email": 1, "phone": 1}) or {}
+        vid = str(vehicle["_id"])
+        items.append({
+            "id": vid,
+            "owner": {"id": str(vehicle.get("user_id") or ""),
+                      "name": owner.get("name", ""), "email": owner.get("email", ""),
+                      "phone": owner.get("phone", "")},
+            "vehicle_number": vehicle.get("vehicle_number", ""),
+            "vehicle_model": vehicle.get("vehicle_model", ""),
+            "vehicle_type": vehicle.get("vehicle_type", ""),
+            "verification_status": vehicle.get("verification_status") or "unverified",
+            "missing": [labels.get(field, field) for field in missing_requirements(vehicle)],
+            "documents": {
+                "dl": f"/api/uploads/vehicle-doc/{vid}/dl"
+                      if (vehicle.get("dl_document") or {}).get("key") else None,
+                "insurance": f"/api/uploads/vehicle-doc/{vid}/insurance"
+                             if (vehicle.get("insurance_document") or {}).get("key") else None,
+                "rc": f"/api/kyc/vehicles/{vid}/rc/document"
+                      if (vehicle.get("rc_document") or {}).get("key") else None,
+            },
+            "updated_at": iso_utc(vehicle.get("updated_at")),
+            "submitted_at": iso_utc(vehicle.get("kyc_submitted_at")),
+            "reason": vehicle.get("kyc_reason"),
+        })
+    return {"ok": True, "data": items, "total": len(items)}
+
+
 def _admin_auto_check(vehicle):
     auto = vehicle.get("auto_check") or {}
     if not auto:
