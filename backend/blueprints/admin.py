@@ -679,15 +679,11 @@ def _auto_submit_if_complete(vehicle, actor_id):
 @require_admin
 @rate_limit("strict")
 def edit_vehicle(vid):
-    """Let staff correct a captain's vehicle details.
+    """Disabled: vehicle editing and document upload are not permitted.
+    Only approve/reject with a reason is allowed."""
+    raise APIError("Vehicle editing and document upload are disabled. "
+                   "Use approve or reject instead.", 403, code="editing_disabled")
 
-    The in-progress list used to be strictly read-only, which left support able
-    to see a mistyped plate or a missing policy number and do nothing about it.
-    Every change is audited against the staff account, and identity fields
-    (plate, licence, insurance) are treated exactly as a captain's own edit:
-    changing one re-opens review, because an approval only ever covers the
-    details that were actually looked at.
-    """
     from .vehicles import _normalize
 
     db = get_db()
@@ -757,6 +753,8 @@ def upload_vehicle_document(vid):
     encryption as an owner upload, the metadata records which staff account
     supplied them, and verification re-opens like any other document change.
     """
+    raise APIError("Vehicle document upload is disabled. "
+                   "Use approve or reject instead.", 403, code="upload_disabled")
     from .uploads import KINDS, _read_upload, apply_vehicle_document
     from ..kyc import missing_requirements
 

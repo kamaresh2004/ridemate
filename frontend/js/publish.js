@@ -90,6 +90,7 @@ export async function renderPublish(root) {
             <select class="select" id="p-vehicle">${vehicles.map((v) => `<option value="${v.id}" data-seats="${v.seat_count}" data-vt="${v.vehicle_type}">${h(v.vehicle_model || v.vehicle_number)} · ${h(v.vehicle_number)}</option>`).join('')}</select>
           </div>
           <div id="vehicleInfo" class="mt-8 form-hint"></div>
+          <div id="vehicleGate" class="mt-8"></div>
         </div>
 
         <div class="card card--pad">
@@ -135,7 +136,31 @@ export async function renderPublish(root) {
     seatsMax.textContent = `of ${max} available`;
     const info = opt.dataset.vt;
     root.querySelector('#vehicleInfo').textContent = `${info} · up to ${max} passenger seats`.replace('· up to', '— up to');
+    renderVehicleGate();
     suggestFare();
+  }
+
+  /* Publishing is refused server-side until the vehicle packet is approved.
+     Say that here, with the outstanding items, instead of letting the captain
+     fill the whole form and only then hit a 403. */
+  const gate = root.querySelector('#vehicleGate');
+  function selectedVehicle() {
+    return vehicles.find((v) => v.id === vehicleSel.value) || null;
+  }
+  function renderVehicleGate() {
+    const v = selectedVehicle();
+    if (!v) { gate.innerHTML = ''; return; }
+    if (v.verification_status === 'verified') { gate.innerHTML = ''; return; }
+    const kyc = v.kyc || {};
+    const missing = kyc.missing_labels || kyc.missing || [];
+    if (v.verification_status === 'submitted') {
+      gate.innerHTML = `<p class="text-sm" style="color:var(--muted)">${icon('clock', 14)} This vehicle is under review — publishing unlocks when an admin approves it.</p>`;
+      return;
+    }
+    gate.innerHTML = `<div class="demo-note" style="margin-top:0">${icon('alert', 14)}
+      <b>This vehicle can't publish yet.</b>
+      ${missing.length ? `Still needed: <b>${h(missing.join(', '))}</b>.` : 'It is not verified yet.'}
+      <a href="#/vehicles">Fix in My vehicles</a></div>`;
   }
   vehicleSel.addEventListener('change', setSeatRange);
   setSeatRange();
@@ -237,6 +262,16 @@ export async function renderPublish(root) {
     const vdate = dateInput.value;
     const vtime = timeInput.value;
     if (!vdate || !vtime) { toast('Pick a date and time for your ride.', 'error'); return; }
+
+    const chosen = selectedVehicle();
+    if (chosen && chosen.verification_status !== 'verified') {
+      const missing = chosen.kyc?.missing_labels || chosen.kyc?.missing || [];
+      toast(chosen.verification_status === 'submitted'
+        ? 'This vehicle is still under review. You can publish once an admin approves it.'
+        : `This vehicle needs verification first${missing.length ? ` — still needed: ${missing.join(', ')}` : ''}. Open My vehicles to finish it.`,
+      'error');
+      return;
+    }
 
     try {
       const res = await Api.createRide({

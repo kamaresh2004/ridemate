@@ -40,8 +40,20 @@ KYC_STATES = {KYC_UNVERIFIED, KYC_SUBMITTED, KYC_VERIFIED, KYC_REJECTED}
 REQUIRED_DOCUMENTS = ("dl_document", "insurance_document")
 REQUIRED_FIELDS = ("dl_number", "insurance_number")
 
+# Driver-facing wording for the outstanding fields. A captain who is told
+# "insurance_number" has no idea what to type; the label is what closes the gap.
+MISSING_LABELS = {
+    "dl_number": "driving licence number",
+    "insurance_number": "insurance policy number",
+    "dl_document": "licence photo",
+    "insurance_document": "insurance photo",
+}
+
 _KYC_TRANSITIONS = {
-    KYC_UNVERIFIED: {KYC_SUBMITTED},
+    # Staff may approve or reject a packet the captain never submitted, as long
+    # as it is complete; review_vehicle enforces that separately so a draft with
+    # missing papers can never be waved through.
+    KYC_UNVERIFIED: {KYC_SUBMITTED, KYC_VERIFIED, KYC_REJECTED},
     KYC_REJECTED: {KYC_SUBMITTED},
     KYC_SUBMITTED: {KYC_VERIFIED, KYC_REJECTED},
     KYC_VERIFIED: {KYC_UNVERIFIED},   # a new document re-opens verification
@@ -78,6 +90,12 @@ def missing_requirements(vehicle):
         if not stored.get("key"):
             missing.append(doc)
     return missing
+
+
+def missing_labels(vehicle):
+    """`missing_requirements` in words the driver can act on."""
+    return [MISSING_LABELS.get(field, field.replace("_", " "))
+            for field in missing_requirements(vehicle)]
 
 
 def submit_for_verification(vehicle_id, user_id):
@@ -153,6 +171,18 @@ def review_vehicle(vehicle_id, decision, reviewer_id, reason=None):
         raise APIError("A reason is required when rejecting a vehicle.", 422,
                        code="kyc_reason_required")
 
+    # Approving a draft skips the captain's "submit" click but must never skip
+    # the papers themselves: a reviewer looking at a half-filled packet has
+    # nothing to approve. Rejecting a draft is allowed and needs its reason.
+    if target == KYC_VERIFIED and kyc_state(vehicle) == KYC_UNVERIFIED:
+        missing = missing_requirements(vehicle)
+        if missing:
+            raise APIError(
+                "This vehicle cannot be approved yet: the packet is still "
+                "missing papers or details.", 422, code="kyc_documents_missing",
+                details={"missing": missing,
+                         "missing_labels": missing_labels(vehicle)})
+
     db.vehicles.update_one(
         {"_id": vehicle_id},
         {"$set": {"verification_status": target,
@@ -211,7 +241,8 @@ def assert_can_publish(vehicle):
         "Verify your vehicle before publishing rides.", 403,
         code="kyc_required",
         details={"verification_status": state,
-                 "missing": missing_requirements(vehicle)})
+                 "missing": missing_requirements(vehicle),
+                 "missing_labels": missing_labels(vehicle)})
 
 
 def kyc_summary(vehicle):
@@ -223,6 +254,7 @@ def kyc_summary(vehicle):
         "can_submit": state in (KYC_UNVERIFIED, KYC_REJECTED)
                       and not missing_requirements(vehicle),
         "missing": missing_requirements(vehicle),
+        "missing_labels": missing_labels(vehicle),
         "reason": vehicle.get("kyc_reason"),
         "submitted_at": vehicle.get("kyc_submitted_at"),
         "reviewed_at": vehicle.get("kyc_reviewed_at"),

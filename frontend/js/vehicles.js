@@ -308,6 +308,34 @@ function applyServerFieldErrors(form, err) {
 }
 
 function card(v) {
+  const kyc = v.kyc || {};
+  const state = v.verification_status || 'unverified';
+  const meta = KYC_STATUS[state] || KYC_STATUS.unverified;
+  /* Only a packet still on the captain's side has gaps to close. A verified
+     vehicle keeps its decision even if legacy seed data has no documents. */
+  const actionable = state === 'unverified' || state === 'rejected';
+  const missing = actionable ? (kyc.missing_labels || kyc.missing || []) : [];
+  /* A vehicle that cannot be submitted used to show no action at all: the
+     captain saw uploaded papers, no "Submit" button and no explanation, and
+     only found out at publish time. Name the gap and offer the fix here. */
+  const needs = missing.length
+    ? `<p class="text-sm mt-8" style="color:color-mix(in srgb, var(--amber) 80%, #7a4b00)">${icon('alert', 14)} Still needed: <b>${h(missing.join(', '))}</b></p>`
+    : '';
+  const cta = kyc.can_submit
+    ? `<button class="btn btn-outline btn-sm" data-submit-kyc="${h(v.id)}">${icon('shield', 14)} Submit for review</button>`
+    : missing.length
+      ? `<button class="btn btn-outline btn-sm" data-edit="${h(v.id)}">${icon('edit', 14)} Add details</button>`
+      : '';
+  const hint = state === 'verified'
+    ? 'Approved — this vehicle can publish rides.'
+    : state === 'submitted'
+      ? 'An admin is checking these papers. Publishing unlocks when the review is approved.'
+      : state === 'rejected'
+        ? 'Fix the papers, then resubmit for review.'
+        : missing.length
+          ? 'Fill the gaps, then submit for review.'
+          : 'Ready to send to an admin for review.';
+
   return `
   <article class="card card--pad card--hover vehicle-card" data-id="${v.id}">
     <div class="flex items-center justify-between mb-12">
@@ -341,24 +369,25 @@ function card(v) {
         <span class="text-faint">Insurance</span>
         ${docSlot('insurance', v, 'insurance')}
       </div>
-      <div class="flex items-center justify-between" style="font-size:12.5px;margin-top:12px">
-        <span class="badge ${v.verification_status === 'verified' ? 'badge--success' : 'badge--ghost'}">${h((v.verification_status || 'unverified').replaceAll('_', ' '))}</span>
-        ${v.kyc?.can_submit ? '<button class="btn btn-outline btn-sm" data-submit-kyc="' + h(v.id) + '">Submit for review</button>' : ''}
+      <div class="flex items-center justify-between gap-8 mt-12" style="font-size:12.5px;flex-wrap:wrap">
+        <span class="badge ${meta.cls}">${icon(meta.ic, 13)} ${meta.label}</span>
+        ${cta}
       </div>
-      <p class="text-faint text-xs mt-8">Vehicle papers are reviewed by RideMate's Trust &amp; Safety team (admin). Your captain identity is a separate check.</p>
-      ${v.verification_status === 'rejected' && v.kyc?.reason ? '<p class="text-faint text-sm mt-8">Review note: ' + h(v.kyc.reason) + '</p>' : ''}
+      ${needs}
+      <p class="text-faint text-xs mt-8">${h(hint)} Papers are reviewed by RideMate's Trust &amp; Safety team (admin). Your captain identity is a separate check.</p>
+      ${state === 'rejected' && kyc.reason ? '<p class="text-faint text-sm mt-8">Review note: ' + h(kyc.reason) + '</p>' : ''}
     </div>
   </article>`;
 }
 
 function docSlot(kind, v, label) {
   const url = v[`${kind}_document_url`];
-  // "add" and "replace" are both offered: a captain whose file was lost to an
-  // ephemeral disk (or who simply wants a better photo) must be able to
-  // re-upload without deleting the vehicle to get the button back.
+  // A stored file is not an approved file: DL and insurance are decided when the
+  // whole packet is reviewed, so the badge stays neutral instead of claiming a
+  // green "verified" that the server never granted.
   return `<span class="flex gap-4 items-center">
     ${url
-      ? `<button type="button" class="badge badge--success" data-view-doc data-url="${h(url)}" title="View uploaded ${label}">${icon('check', 12)} ${label}</button>`
+      ? `<button type="button" class="badge badge--ghost" data-view-doc data-url="${h(url)}" title="View uploaded ${label}">${icon('eye', 12)} ${label} uploaded</button>`
       : ''}
     <label class="badge badge--ghost" style="cursor:pointer" title="${url ? 'Replace' : 'Upload'} ${label}">${icon('upload', 12)} ${url ? 'replace' : 'add'}
       <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" hidden data-doc="${kind}" data-vid="${v.id}" /></label>
@@ -593,9 +622,20 @@ function vehicleFormModal(v, onSaved) {
     submit.innerHTML = `${spinnerInline()}`;
     const payload = isEdit ? changedFields(v, data) : data;
     let createdId = null;
+    let submittedForReview = Boolean(completePacket);
     try {
       if (isEdit) {
-        await Api.updateVehicle(v.id, payload);
+        const updated = await Api.updateVehicle(v.id, payload);
+        /* Adding the last missing detail (usually the insurance policy number)
+           should not leave a complete packet sitting unsubmitted with the
+           "Submit" button as the only way forward. The server decides whether
+           the packet is complete; a refusal just means it stays on the card. */
+        if (!v.kyc?.can_submit && updated?.vehicle?.kyc?.can_submit) {
+          try {
+            await Api.submitVehicleVerification(v.id);
+            submittedForReview = true;
+          } catch { /* the card still offers Submit for review */ }
+        }
       } else {
         const created = await Api.createVehicle(payload);
         createdId = created.vehicle.id;
@@ -609,7 +649,10 @@ function vehicleFormModal(v, onSaved) {
       const hasDocuments = Object.values(files).some(Boolean);
       const identityState = captainKyc?.kyc_status;
       const identityPending = Boolean(identityState) && identityState !== 'verified';
-      const message = isEdit ? 'Vehicle updated.'
+      const message = isEdit
+        ? submittedForReview
+          ? 'Vehicle updated and submitted for admin review.'
+          : 'Vehicle updated.'
         : completePacket ? 'Vehicle and documents submitted for admin review.'
           : files.rc
             ? 'Vehicle saved. RC is pending admin review; complete the licence and insurance packet for vehicle review.'
